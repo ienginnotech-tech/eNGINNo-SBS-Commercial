@@ -1,0 +1,14 @@
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.log
+
+# Never commit real facility/customer data — the real database lives in Google Sheets only
+*.xlsx
+*.xls
+*.csv
+
+# Local secrets / exported configs (GAS URLs, API keys) — these belong in the browser's localStorage
+# or in Apps Script's own project, never in source control
+secrets.json
+*.local.json
