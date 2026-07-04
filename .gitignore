@@ -3,6 +3,9 @@
 Thumbs.db
 *.log
 
+# Claude Code runtime state (session locks, not project content)
+.claude/scheduled_tasks.lock
+
 # Never commit real facility/customer data — the real database lives in Google Sheets only
 *.xlsx
 *.xls
