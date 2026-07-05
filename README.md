@@ -32,7 +32,8 @@ apps-script/Code.gs            ← Backend: doGet/doPost บน Google Apps Scri
    - Who has access: **Anyone**
 5. กด Deploy แล้วอนุญาตสิทธิ์ (authorize) ตามที่ Google ขอ
 6. คัดลอก **Web app URL** ที่ได้ (รูปแบบ `https://script.google.com/macros/s/XXXXX/exec`)
-7. เปิดแอป → เข้า Settings/Configuration ในแอป → วาง URL นี้ (จะถูกเก็บเป็น `sbs_gas_url` ใน `localStorage` ของเบราว์เซอร์)
+7. เปิดแอป → Login ด้วยบัญชี Admin → เมนู **Admin Management → 💓 System Health** → วาง URL ในช่อง "GAS Web App URL" → กด "💾 บันทึก + ทดสอบ"
+   (ระบบจะทดสอบเชื่อมต่อก่อนบันทึก แล้วโหลดหน้าใหม่อัตโนมัติ — URL จะถูกเก็บเป็น `sbs_gas_url` ใน `localStorage` ของเบราว์เซอร์)
 
 ชีตย่อยแต่ละแท็บ (Users, WR, assets, ppm, ma, inv, energy, ...) จะถูกสร้างอัตโนมัติโดย Code.gs
 เมื่อมีการเขียนข้อมูลครั้งแรก ไม่ต้องสร้างเองล่วงหน้า

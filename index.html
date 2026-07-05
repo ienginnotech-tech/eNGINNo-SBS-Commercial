@@ -1258,6 +1258,16 @@ select.form-control option{background:var(--bg3)}
 
   <!-- System Health Pane — สำหรับผู้ดูแลระบบ/agent ตรวจสอบภาพรวมระบบ -->
   <div id="adm-pane-health" style="display:none">
+    <div class="card mb-16">
+      <div class="ff-d fw-6" style="font-size:13px;margin-bottom:10px">⚙ Backend Configuration (Google Apps Script)</div>
+      <div class="form-row">
+        <div class="form-group" style="flex:1"><label class="form-label">GAS Web App URL</label>
+          <input class="form-control" id="cfg-gas-url" placeholder="https://script.google.com/macros/s/XXXXX/exec">
+        </div>
+        <button class="btn btn-primary btn-sm" style="align-self:flex-end;height:36px" onclick="saveGASUrl()">💾 บันทึก + ทดสอบ</button>
+      </div>
+      <div id="cfg-gas-status" style="font-size:12px;margin-top:8px;color:var(--text3)"></div>
+    </div>
     <div class="card">
       <div class="flex" style="justify-content:space-between;align-items:center;margin-bottom:12px">
         <div class="ff-d fw-6" style="font-size:13px">💓 System Health</div>
@@ -1871,7 +1881,7 @@ function syncEntityToSheets(k,v){
   if(!url||SYNCABLE_ENTITY_KEYS.indexOf(k)<0) return;
   clearTimeout(_syncTimers[k]);
   _syncTimers[k]=setTimeout(()=>{
-    fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'saveEntity',sheet:k,data:v})}).catch(()=>{});
+    fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'saveEntity',sheet:k,data:v})}).catch(()=>{});
   },800); // debounce กันยิง request ถี่เกินไปตอนแก้ไขข้อมูลต่อเนื่อง
 }
 async function pullEntityFromSheets(k){
@@ -1903,7 +1913,7 @@ async function pullUsersFromSheets(){
 async function callUserAction(action,payload){
   const url=GASURL();
   if(!url) return;
-  try{ await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,...payload})}); }catch(e){}
+  try{ await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action,...payload})}); }catch(e){}
 }
 const DB = {
   get:(k,d)=>{ try{return JSON.parse(localStorage.getItem(K+k))??d;}catch{return d;} },
@@ -3043,7 +3053,7 @@ async function doImport(converted, resEl){
       const BATCH=500;let synced=0;
       for(let i=0;i<toSync.length;i+=BATCH){
         const batch=toSync.slice(i,i+BATCH);
-        const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'importFixtab',rows:batch})});
+        const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'importFixtab',rows:batch})});
         const d=await r.json();if(d.ok) synced+=(d.inserted||0)+(d.updated||0);
       }
       resEl.innerHTML+=`<div style="color:var(--green);margin-top:4px">☁ Sync Sheets สำเร็จ: ${synced.toLocaleString('th-TH')} รายการ</div>`;
@@ -3501,7 +3511,7 @@ function exportESG(){exportXLS([{Environmental:'Energy Intensity 142 kWh/m²',So
 async function syncToSheets(sheet,data){
   const url=localStorage.getItem('sbs_gas_url');
   if(!url)return;
-  try{await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'insert',sheet,data})});}catch(e){}
+  try{await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'insert',sheet,data})});}catch(e){}
 }
 
 // ════════════════════════════════════════════════════
@@ -4166,11 +4176,15 @@ async function cmRegister(){
   if(url){
     // โหมดออนไลน์: สมัครผ่าน GAS เพื่อให้ Admin ทุกที่เห็นคำขอเดียวกัน (รหัสผ่าน hash ฝั่ง server)
     try{
-      const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+      const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
         body:JSON.stringify({action:'register',username:uname,password:pass,name,pos,email,dept,building,role})});
       const d=await r.json();
       if(!d.ok){ errEl.textContent=d.error||'สมัครไม่สำเร็จ'; errEl.style.display='block'; return; }
-      document.getElementById('cm-reg-ok').style.display='block';
+      const okEl=document.getElementById('cm-reg-ok');
+      okEl.textContent=d.bootstrapAdmin
+        ? '✅ สมัครสำเร็จ — เป็นผู้ใช้คนแรกของระบบ ได้รับสิทธิ์ Admin โดยอัตโนมัติ เข้าสู่ระบบได้ทันที'
+        : '✅ ส่งคำขอสำเร็จ! รอ Admin อนุมัติ';
+      okEl.style.display='block';
       setTimeout(()=>switchCMTab('login'),2500);
       return;
     }catch(e){ errEl.textContent='เชื่อมต่อ Server ไม่สำเร็จ กรุณาลองใหม่'; errEl.style.display='block'; return; }
@@ -4201,7 +4215,7 @@ async function cmLogin(){
   const url=GASURL();
   if(url){
     try{
-      const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'login',username:u,password:p})});
+      const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'login',username:u,password:p})});
       const d=await r.json();
       if(d.ok && d.user){ cmLoginSuccess(d.user); return; }
       if(d.pending){ err.textContent='บัญชีของคุณยังรออนุมัติจาก Admin ครับ'; err.style.display='block'; return; }
@@ -4678,11 +4692,11 @@ async function saveReportSettings(){
   const url=GASURL();
   if(url){
     try{
-      const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+      const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
         body:JSON.stringify({action:'update',sheet:'Config',id:RPT_SHEET_KEY,
           data:{key:RPT_SHEET_KEY,value:JSON.stringify(reports),updatedBy:cmCurrentUser?.name||'Admin',updatedAt:new Date().toISOString()}})});
       const d=await r.json();
-      if(!d.ok)await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+      if(!d.ok)await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
         body:JSON.stringify({action:'insert',sheet:'Config',
           data:{key:RPT_SHEET_KEY,value:JSON.stringify(reports),updatedBy:cmCurrentUser?.name||'Admin',updatedAt:new Date().toISOString()}})});
       showToast('✅ บันทึก Report Settings สำเร็จ — ทุกคนจะเห็นเหมือนกัน');
@@ -4749,11 +4763,11 @@ async function saveDashSettings(){
   const url=GASURL();
   if(url){
     try{
-      const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+      const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
         body:JSON.stringify({action:'update',sheet:'Config',id:DASH_SHEET_KEY,
           data:{key:DASH_SHEET_KEY,value:JSON.stringify(widgets),updatedBy:cmCurrentUser?.name||'Admin',updatedAt:new Date().toISOString()}})});
       const d=await r.json();
-      if(!d.ok)await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+      if(!d.ok)await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
         body:JSON.stringify({action:'insert',sheet:'Config',
           data:{key:DASH_SHEET_KEY,value:JSON.stringify(widgets),updatedBy:cmCurrentUser?.name||'Admin',updatedAt:new Date().toISOString()}})});
       showToast('✅ บันทึก Dashboard Settings สำเร็จ — ทุกคนจะเห็นเหมือนกัน');
@@ -4826,14 +4840,14 @@ async function saveFeatureSettings(){
   if(url){
     try{
       // ลอง update ก่อน
-      const r = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+      const r = await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
         body:JSON.stringify({action:'update',sheet:'Config',id:FT_SHEET_KEY,
           data:{key:FT_SHEET_KEY,value:JSON.stringify(features),
             updatedBy:cmCurrentUser?.name||'Admin',updatedAt:new Date().toISOString()}})});
       const d = await r.json();
       if(!d.ok){
         // ไม่มี record → insert ใหม่
-        await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+        await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
           body:JSON.stringify({action:'insert',sheet:'Config',
             data:{key:FT_SHEET_KEY,value:JSON.stringify(features),
               updatedBy:cmCurrentUser?.name||'Admin',updatedAt:new Date().toISOString()}})});
@@ -5253,7 +5267,29 @@ function switchAdmTab(tab,btn){
 }
 
 // ── SYSTEM HEALTH — สำหรับ Admin/agent ตรวจภาพรวมข้อมูลจริงบน Google Sheets ──
+async function saveGASUrl(){
+  const input=document.getElementById('cfg-gas-url');
+  const statusEl=document.getElementById('cfg-gas-status');
+  const url=input.value.trim();
+  if(!url){ localStorage.removeItem('sbs_gas_url'); statusEl.textContent='🔌 ลบ GAS URL แล้ว — กลับสู่โหมด Offline'; statusEl.style.color='var(--text3)'; return; }
+  statusEl.textContent='⏳ กำลังทดสอบการเชื่อมต่อ...'; statusEl.style.color='var(--text3)';
+  try{
+    const r=await fetch(`${url}?action=health`);
+    const d=await r.json();
+    if(!d.ok){ statusEl.textContent='❌ URL นี้ตอบกลับแต่ไม่ถูกต้อง: '+(d.error||'unknown'); statusEl.style.color='var(--red)'; return; }
+    localStorage.setItem('sbs_gas_url', url);
+    statusEl.textContent='✅ เชื่อมต่อสำเร็จและบันทึกแล้ว — โหลดหน้าใหม่เพื่อเริ่มใช้งานโหมด Online';
+    statusEl.style.color='var(--green)';
+    showToast('✅ บันทึก GAS URL สำเร็จ — กำลังโหลดหน้าใหม่...');
+    setTimeout(()=>location.reload(), 1500);
+  }catch(e){
+    statusEl.textContent='❌ เชื่อมต่อไม่สำเร็จ: '+e.message+' (ตรวจสอบว่า Deploy เป็น "Anyone" แล้ว)';
+    statusEl.style.color='var(--red)';
+  }
+}
 async function renderSystemHealth(){
+  const gasInput=document.getElementById('cfg-gas-url');
+  if(gasInput && !gasInput.value) gasInput.value=GASURL();
   const statusEl=document.getElementById('health-status');
   const tbody=document.getElementById('health-tbody');
   const url=GASURL();

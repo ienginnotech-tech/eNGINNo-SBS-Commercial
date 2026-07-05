@@ -223,6 +223,9 @@ function actionRegister(body) {
   if (users.some(function (x) { return x.username === body.username; })) {
     return { ok: false, error: 'Username นี้ถูกใช้แล้ว' };
   }
+  // Bootstrap: ถ้ายังไม่มี user เลยใน Sheet นี้ ให้คนแรกที่สมัครเป็น admin ที่อนุมัติแล้วทันที
+  // (ไม่งั้นจะไม่มีทางสร้าง admin คนแรกได้เลย เพราะการอนุมัติปกติต้องมี admin อยู่ก่อน)
+  const isFirstUser = users.length === 0;
   const salt = Utilities.getUuid();
   appendRow(sheet, {
     id: 'U-' + Date.now(),
@@ -232,14 +235,14 @@ function actionRegister(body) {
     email: body.email || '',
     dept: body.dept || '',
     building: body.building || '',
-    role: body.role || 'viewer',
+    role: isFirstUser ? 'admin' : (body.role || 'viewer'),
     bg: 'commercial',
     salt: salt,
     passHash: hashPassword(body.password, salt),
-    status: 'pending',
+    status: isFirstUser ? 'approved' : 'pending',
     regDate: new Date().toISOString()
   });
-  return { ok: true };
+  return { ok: true, bootstrapAdmin: isFirstUser };
 }
 
 function actionSetUserStatus(username, status, reason) {
