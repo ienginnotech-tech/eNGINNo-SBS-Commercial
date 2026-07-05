@@ -603,6 +603,12 @@ select.form-control option{background:var(--bg3)}
     <div class="kpi red"><div class="kpi-label">High Priority</div><div class="kpi-value t-red" id="wr-crit">0</div><div class="kpi-sub">งานเร่งด่วน</div></div>
   </div>
 
+  <!-- Technician Workload — คำนวณอัตโนมัติจากงาน Open/In-progress ไม่ต้องตั้งสถานะเอง -->
+  <div class="card mb-16">
+    <div class="ff-d fw-6" style="font-size:12px;margin-bottom:8px">👷 ภาระงานช่างตอนนี้</div>
+    <div id="tech-workload-list" class="flex gap-8" style="flex-wrap:wrap"></div>
+  </div>
+
   <!-- Charts -->
   <div class="grid-3 mb-16">
     <div class="card"><div class="ff-d fw-6" style="font-size:13px;margin-bottom:10px">📊 WR Monthly Trend</div><div class="chart-wrap" style="height:180px"><canvas id="c-wr-trend"></canvas></div></div>
@@ -1855,6 +1861,37 @@ select.form-control option{background:var(--bg3)}
   </div>
 </div>
 
+<!-- CLOSE WR MODAL — แทนที่ prompt() เดิม เพิ่มลายเซ็นดิจิทัลฝังในขั้นตอนปิดงานโดยตรง (ไม่แยกเป็นโมดูลต่างหากแบบ Fixtab) -->
+<div class="modal-overlay" id="closeWRModal">
+  <div class="modal modal-lg">
+    <div class="modal-hdr">
+      <div class="modal-title">✅ ปิดงาน Work Request</div>
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('closeWRModal')">✕</button>
+    </div>
+    <input type="hidden" id="cwr-id">
+    <div class="grid-2">
+      <div class="form-group"><label class="form-label">MTTR (ชั่วโมง)</label><input type="number" step="0.1" class="form-control" id="cwr-mttr" placeholder="0"></div>
+      <div class="form-group"><label class="form-label">ค่าใช้จ่าย (฿)</label><input type="number" class="form-control" id="cwr-cost" placeholder="0"></div>
+    </div>
+    <div class="form-group"><label class="form-label">รายละเอียดการซ่อม</label><textarea class="form-control" id="cwr-detail" rows="3" placeholder="สรุปงานที่ทำ / อะไหล่ที่ใช้"></textarea></div>
+    <div class="form-group">
+      <label class="form-label">ชื่อผู้ยืนยันงาน (ช่าง/ผู้ตรวจรับ)</label>
+      <input class="form-control" id="cwr-signer-name" placeholder="ชื่อ-นามสกุล">
+    </div>
+    <div class="form-group">
+      <label class="form-label">✍ ลายเซ็นยืนยันงาน</label>
+      <div style="background:#fff;border-radius:var(--r);border:1px solid var(--border);display:inline-block">
+        <canvas id="cwr-sig-canvas" width="460" height="160" style="touch-action:none;cursor:crosshair;display:block"></canvas>
+      </div>
+      <div class="mt-8"><button type="button" class="btn btn-secondary btn-sm" onclick="clearSignaturePad()">🗑 ล้างลายเซ็น</button></div>
+    </div>
+    <div class="flex gap-8 mt-16" style="justify-content:flex-end">
+      <button class="btn btn-secondary" onclick="closeModal('closeWRModal')">ยกเลิก</button>
+      <button class="btn btn-success" onclick="submitCloseWR()">✅ ยืนยันปิดงาน</button>
+    </div>
+  </div>
+</div>
+
 <!-- ADD TRAINING -->
 <div class="modal-overlay" id="addTrainModal">
   <div class="modal">
@@ -1914,6 +1951,74 @@ async function callUserAction(action,payload){
   const url=GASURL();
   if(!url) return;
   try{ await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action,...payload})}); }catch(e){}
+}
+
+// ── แนบไฟล์ (รูป/ลายเซ็น) ขึ้น Google Drive — ย่อรูปก่อนอัปโหลดเสมอเพื่อไม่ให้ payload ใหญ่เกินไป ──
+function resizeImageFile(file, maxDim){
+  return new Promise((resolve,reject)=>{
+    const img=new Image();
+    const reader=new FileReader();
+    reader.onload=e=>{ img.onload=()=>{
+      let{width:w,height:h}=img;
+      if(w>maxDim||h>maxDim){ const scale=maxDim/Math.max(w,h); w=Math.round(w*scale); h=Math.round(h*scale); }
+      const canvas=document.createElement('canvas'); canvas.width=w; canvas.height=h;
+      canvas.getContext('2d').drawImage(img,0,0,w,h);
+      resolve(canvas.toDataURL('image/jpeg',0.8));
+    }; img.onerror=reject; img.src=e.target.result; };
+    reader.onerror=reject;
+    reader.readAsDataURL(file);
+  });
+}
+// ── บันทึก WR รายตัวขึ้น Sheet จริง (upsert ตาม id ผ่าน action เดียวกับ importFixtab) ──
+// เดิมฟังก์ชัน add/update/close WR ยิง syncToSheets('Work_Orders',...) ซึ่งเป็นชื่อชีตที่ไม่ตรงกับ
+// ชีต 'WR' จริงที่ getWR/importFixtab ใช้ ทำให้การแก้ไขรายตัวไม่เคยถูกบันทึกขึ้น Sheets จริงเลย
+async function syncWRRecords(records){
+  const url=GASURL();
+  if(!url||!records?.length) return;
+  try{ await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'importFixtab',rows:records})}); }catch(e){}
+}
+async function deleteWRRecord(id){
+  const url=GASURL();
+  if(!url) return;
+  try{ await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'deleteWR',id})}); }catch(e){}
+}
+
+async function uploadAttachment(file, subfolder){
+  const url=GASURL();
+  if(!url){ showToast('⚠ ต้องตั้งค่า GAS URL ก่อนถึงจะแนบไฟล์ได้ (โหมด Offline ยังไม่รองรับ)'); return null; }
+  const isImage=file.type.startsWith('image/');
+  const dataUrl=isImage ? await resizeImageFile(file,1280) : await new Promise((res,rej)=>{const r=new FileReader();r.onload=e=>res(e.target.result);r.onerror=rej;r.readAsDataURL(file);});
+  const base64Data=dataUrl.split(',')[1];
+  const mimeType=isImage?'image/jpeg':file.type;
+  const filename=(isImage?file.name.replace(/\.[^.]+$/,'')+'.jpg':file.name);
+  try{
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify({action:'uploadFile',filename,mimeType,base64Data,subfolder})});
+    const d=await r.json();
+    return d.ok ? d : null;
+  }catch(e){ showToast('❌ อัปโหลดไฟล์ไม่สำเร็จ: '+e.message); return null; }
+}
+
+// ── รูปแนบของ WR — แนบได้ทุกขั้นตอน เก็บเป็น array ของ {url, filename, uploadedAt} ──
+function renderWRAttachments(w){
+  const atts=w.attachments||[];
+  if(!atts.length) return '<span class="t-muted" style="font-size:11px">ยังไม่มีรูปแนบ</span>';
+  return atts.map(a=>`<a href="${a.url}" target="_blank" title="${a.filename||''}">
+    <img src="${a.directUrl||a.url}" style="width:64px;height:64px;object-fit:cover;border-radius:6px;border:1px solid var(--border)"></a>`).join('');
+}
+async function addWRAttachment(id, inputEl){
+  const file=inputEl.files[0];
+  if(!file) return;
+  showToast('⏳ กำลังอัปโหลดรูป...');
+  const uploaded=await uploadAttachment(file, id);
+  if(!uploaded){ return; }
+  const i=wrAllData.findIndex(w=>w.id===id||w.ticketNumber===id);
+  if(i<0) return;
+  wrAllData[i].attachments=[...(wrAllData[i].attachments||[]), {url:uploaded.url, directUrl:uploaded.directUrl, filename:file.name, uploadedAt:new Date().toISOString()}];
+  DB.set('wr',wrAllData);
+  syncWRRecords([wrAllData[i]]);
+  showToast('✅ แนบรูปสำเร็จ');
+  showWRDetail(id);
 }
 const DB = {
   get:(k,d)=>{ try{return JSON.parse(localStorage.getItem(K+k))??d;}catch{return d;} },
@@ -2551,6 +2656,22 @@ function applyWRFilter(){
   renderWRTable();
   renderWRKPI();
   renderBranchPills();
+  renderTechWorkload();
+}
+
+// ── ภาระงานช่างตอนนี้ — สรุปจากช่างทุกคนที่เคยถูก assign งาน (ไม่ใช่ master list ตายตัว) ──
+function renderTechWorkload(){
+  const el=document.getElementById('tech-workload-list');
+  if(!el) return;
+  const all = wrAllData.length ? wrAllData : DB.get('wr',[]);
+  const names=new Set();
+  all.forEach(w=>{
+    const t=(w.assignedTo||w.tech||'').split(',')[0].trim();
+    if(t) names.add(t);
+  });
+  if(names.size===0){ el.innerHTML='<span class="t-muted" style="font-size:11px">ยังไม่มีข้อมูลช่าง</span>'; return; }
+  const rows=[...names].map(n=>({name:n,load:getTechWorkload(n)||0})).sort((a,b)=>b.load-a.load).slice(0,20);
+  el.innerHTML=rows.map(r=>`<span class="badge ${r.load>0?'bg-yellow':'bg-green'}" style="font-size:11px">${r.name} ${r.load>0?'🔧 '+r.load:'✓ ว่าง'}</span>`).join('');
 }
 
 function renderWRTable(){
@@ -2577,7 +2698,7 @@ function renderWRTable(){
       <td><span class="badge ${priColor[w.priority]||'bg-gray'}" style="font-size:10px">${w.priority||'—'}</span></td>
       <td style="font-size:11px">${w.reportedBy||w.by||'—'}</td>
       <td style="font-size:11px">${date}</td>
-      <td style="font-size:11px">${tech}</td>
+      <td style="font-size:11px">${tech}${techStatusBadge(tech)}</td>
       <td class="ff-m" style="font-size:11px">${w.mttrHours||w.mttr||'—'}</td>
       <td><span class="badge ${stColor[w.status]||'bg-gray'}" style="font-size:10px">${stLabel[w.status]||w.status||'—'}</span></td>
       <td><div class="flex gap-8">
@@ -2758,7 +2879,7 @@ function saveWR(){
   wrAllData.unshift(w);DB.set('wr',wrAllData);
   closeModal('addWRModal');
   applyWRFilter();drawWRCharts();
-  syncToSheets('Work_Orders',w);
+  syncWRRecords([w]);
   ['wr-cost','wr-mttr-input'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=0;});
   ['wr-by','wr-tech','wr-phone','wr-desc','wr-complete-detail'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
   ['wr-branch','wr-asset','wr-issue-type'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
@@ -2772,25 +2893,78 @@ function updateWR(id,status){
   wrAllData[i].status=status;
   DB.set('wr',wrAllData);
   applyWRFilter();
-  syncToSheets('Work_Orders',{id,status});
+  syncWRRecords([wrAllData[i]]);
 }
 function closeWR(id){
-  const mttr=parseFloat(prompt('MTTR (ชั่วโมง):','0'))||0;
-  const cost=parseFloat(prompt('ค่าใช้จ่าย (฿):','0'))||0;
+  openCloseWRModal(id);
+}
+
+// ── ลายเซ็นดิจิทัลตอนปิดงาน — ฝังในขั้นตอนปิดงานเดิมโดยตรง ไม่แยกเป็นโมดูลต่างหาก ──
+let sigCtx=null, sigDrawing=false, sigHasContent=false;
+function initSignaturePad(){
+  const canvas=document.getElementById('cwr-sig-canvas');
+  if(!canvas) return;
+  sigCtx=canvas.getContext('2d');
+  sigCtx.fillStyle='#fff'; sigCtx.fillRect(0,0,canvas.width,canvas.height);
+  sigCtx.strokeStyle='#111'; sigCtx.lineWidth=2; sigCtx.lineCap='round';
+  sigHasContent=false;
+  const pos=e=>{ const r=canvas.getBoundingClientRect(); return {x:(e.clientX-r.left)*(canvas.width/r.width), y:(e.clientY-r.top)*(canvas.height/r.height)}; };
+  canvas.onpointerdown=e=>{ sigDrawing=true; sigHasContent=true; const p=pos(e); sigCtx.beginPath(); sigCtx.moveTo(p.x,p.y); };
+  canvas.onpointermove=e=>{ if(!sigDrawing) return; const p=pos(e); sigCtx.lineTo(p.x,p.y); sigCtx.stroke(); };
+  canvas.onpointerup=()=>{ sigDrawing=false; };
+  canvas.onpointerleave=()=>{ sigDrawing=false; };
+}
+function clearSignaturePad(){
+  const canvas=document.getElementById('cwr-sig-canvas');
+  if(!canvas||!sigCtx) return;
+  sigCtx.fillStyle='#fff'; sigCtx.fillRect(0,0,canvas.width,canvas.height);
+  sigHasContent=false;
+}
+function openCloseWRModal(id){
+  document.getElementById('cwr-id').value=id;
+  document.getElementById('cwr-mttr').value='';
+  document.getElementById('cwr-cost').value='';
+  document.getElementById('cwr-detail').value='';
+  document.getElementById('cwr-signer-name').value='';
+  openModal('closeWRModal');
+  setTimeout(initSignaturePad,50);
+}
+async function submitCloseWR(){
+  const id=document.getElementById('cwr-id').value;
+  const mttr=parseFloat(document.getElementById('cwr-mttr').value)||0;
+  const cost=parseFloat(document.getElementById('cwr-cost').value)||0;
+  const detail=document.getElementById('cwr-detail').value||'';
+  const signerName=document.getElementById('cwr-signer-name').value||'';
   const i=wrAllData.findIndex(w=>w.id===id||w.ticketNumber===id);
-  if(i<0)return;
-  wrAllData[i].status='closed';wrAllData[i].mttrHours=mttr;wrAllData[i].cost=cost;
+  if(i<0){ closeModal('closeWRModal'); return; }
+  wrAllData[i].status='closed';
+  wrAllData[i].mttrHours=mttr;
+  wrAllData[i].cost=cost;
+  wrAllData[i].completeDetail=detail;
   wrAllData[i].closeDate=new Date().toISOString().split('T')[0];
+  wrAllData[i].signerName=signerName;
+
+  if(sigHasContent && GASURL()){
+    showToast('⏳ กำลังบันทึกลายเซ็น...');
+    const canvas=document.getElementById('cwr-sig-canvas');
+    const blob=await new Promise(res=>canvas.toBlob(res,'image/png'));
+    const uploaded=await uploadAttachment(new File([blob],'signature-'+id+'.png',{type:'image/png'}), id);
+    if(uploaded) wrAllData[i].signatureUrl=uploaded.directUrl||uploaded.url;
+  }
+
   DB.set('wr',wrAllData);
   applyWRFilter();drawWRCharts();
-  syncToSheets('Work_Orders',{id,status:'closed',mttrHours:mttr,cost});
-  alert('✅ ปิด WR สำเร็จ — MTTR: '+mttr+'h');
+  syncWRRecords([wrAllData[i]]);
+  closeModal('closeWRModal');
+  closeModal('wrDetailModal');
+  showToast('✅ ปิดงานสำเร็จ — MTTR: '+mttr+'h');
 }
 function deleteWR(id){
   if(!confirm('ลบ WR "'+id+'"?'))return;
   wrAllData=wrAllData.filter(w=>w.id!==id&&w.ticketNumber!==id);
   DB.set('wr',wrAllData);
   applyWRFilter();drawWRCharts();
+  deleteWRRecord(id);
 }
 function exportWR(){exportXLS(wrFiltered,'WorkRequest_'+new Date().toISOString().split('T')[0]);}
 function showWRMsg(msg){console.log(msg);}
@@ -2889,6 +3063,16 @@ function convertFixtabRow(r){
     closedTaskDetail: (r['Closed Task Detail']||'').slice(0,200),
     closedTaskRating: r['Closed Task Rating']||'',
     completeDetailTech: (r['Complete Detail By Technician']||'').replace(/_x000d_/g,'').trim().slice(0,200),
+    companyName: r['Company Name']||r.companyName||'',
+    // Rejected fields (เดิมเคยตกหล่นจากการ import — เพิ่มให้ครบตาม Fixtab export จริง)
+    rejectedDetail: (r['Rejected Detail']||r.rejectedDetail||'').replace(/_x000d_/g,'').trim().slice(0,300),
+    rejectedDate:   r['Rejected Date']||r.rejectedDate||'',
+    rejectedTime:   r['Rejected Time']||r.rejectedTime||'',
+    // Transfer fields (เดิมเคยตกหล่นจากการ import — เพิ่มให้ครบตาม Fixtab export จริง)
+    transferDate:   r['Transfer Date']||r.transferDate||'',
+    transferTime:   r['Transfer Time']||r.transferTime||'',
+    transferBy:     r['Transfer By']||r.transferBy||'',
+    transferDetail: (r['Transfer Detail']||r.transferDetail||'').replace(/_x000d_/g,'').trim().slice(0,300),
     source: 'Fixtab',
     createdAt: openDate||new Date().toISOString().split('T')[0]
   };
@@ -3824,9 +4008,22 @@ function showWRDetail(id){
     <div class="grid-2 mb-12"><div><div class="form-label">Branch</div><span class="badge bg-blue">${w.branchName||w.branch||'—'}</span></div><div><div class="form-label">Issue Type</div><span class="badge bg-orange">${w.issueType||w.assetName||'—'}</span></div></div>
     <div class="form-group"><div class="form-label">รายละเอียดปัญหา</div><div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:12px;font-size:12px;line-height:1.6">${w.description||w.desc||'—'}</div></div>
     <div class="grid-2 mb-12"><div><div class="form-label">ประเภทงาน</div><span class="badge bg-teal">${w.type||'—'}</span></div><div><div class="form-label">Priority</div><span class="badge ${priColor[w.priority]||'bg-gray'}">${w.priority||'—'}</span></div></div>
-    <div class="grid-2 mb-12"><div><div class="form-label">ผู้แจ้ง</div><div style="font-size:12px">${w.reportedBy||w.by||'—'} ${w.reporterPhone?'('+w.reporterPhone+')':''}</div></div><div><div class="form-label">ช่าง / Technician</div><div style="font-size:12px">${w.assignedTo||w.tech||'—'}</div></div></div>
+    <div class="grid-2 mb-12"><div><div class="form-label">ผู้แจ้ง</div><div style="font-size:12px">${w.reportedBy||w.by||'—'} ${w.reporterPhone?'('+w.reporterPhone+')':''}</div></div><div><div class="form-label">ช่าง / Technician</div><div style="font-size:12px">${w.assignedTo||w.tech||'—'}${techStatusBadge(w.assignedTo||w.tech)}</div></div></div>
     <div class="grid-2 mb-12"><div><div class="form-label">วันที่แจ้ง</div><div class="ff-m" style="font-size:12px">${w.openDate||w.date||'—'}</div></div><div><div class="form-label">วันที่ปิด</div><div class="ff-m" style="font-size:12px">${w.closeDate||w.completeDate||'—'}</div></div></div>
     ${w.completeDetail?`<div class="form-group"><div class="form-label">รายละเอียดการซ่อม</div><div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:12px;font-size:12px;line-height:1.6">${w.completeDetail}</div></div>`:''}
+    ${w.status==='rejected'&&(w.rejectedDetail||w.rejectedDate)?`<div class="form-group"><div class="form-label">เหตุผลที่ปฏิเสธงาน</div><div style="background:var(--red-dim);border:1px solid rgba(239,68,68,.3);border-radius:var(--r);padding:12px;font-size:12px;line-height:1.6">${w.rejectedDetail||'—'}<div class="t-muted mt-8 ff-m" style="font-size:11px">${w.rejectedDate||''} ${w.rejectedTime||''}</div></div></div>`:''}
+    ${w.transferDate||w.transferDetail?`<div class="form-group"><div class="form-label">ประวัติการโอนงาน</div><div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:12px;font-size:12px;line-height:1.6">${w.transferDetail||'—'}<div class="t-muted mt-8 ff-m" style="font-size:11px">โอนโดย ${w.transferBy||'—'} · ${w.transferDate||''} ${w.transferTime||''}</div></div></div>`:''}
+
+    <!-- แนบรูปได้ทุกขั้นตอนของงาน ไม่ผูกกับขั้นตอน assign อย่างเดียวแบบ Fixtab -->
+    <div class="form-group">
+      <div class="form-label">📷 รูปแนบ (${(w.attachments||[]).length})</div>
+      <div id="wr-attach-gallery" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">${renderWRAttachments(w)}</div>
+      <input type="file" id="wr-attach-input" accept="image/*" style="display:none" onchange="addWRAttachment('${w.id||w.ticketNumber}',this)">
+      <button class="btn btn-secondary btn-sm" onclick="document.getElementById('wr-attach-input').click()">📎 แนบรูปเพิ่ม</button>
+    </div>
+
+    ${w.signatureUrl?`<div class="form-group"><div class="form-label">✍ ลายเซ็นยืนยันงาน</div><img src="${w.signatureUrl}" style="max-width:220px;border:1px solid var(--border);border-radius:var(--r);background:#fff"></div>`:''}
+
     <div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--r-lg);padding:14px;margin-top:8px">
       <div class="ff-d fw-6" style="font-size:13px;margin-bottom:10px">📐 MTTR & Maintainability</div>
       <div class="grid-3">
@@ -3845,6 +4042,27 @@ function showWRDetail(id){
 }
 
 function exportAnalytics(){const data=getAnalyticsData();const byB=groupByKey(data,'branchName');exportXLS(Object.entries(byB).map(([b,rows])=>{const s=calcGroupStats(rows);const m=calcMaintainability(s.avgMttr,4);return{Branch:b,Total:s.total,Closed:s.closed,'Avg MTTR (h)':s.avgMttr?s.avgMttr.toFixed(2):0,'Maintainability %':m?m.toFixed(2):0};}),'WR_Analytics_'+new Date().toISOString().split('T')[0]);}
+
+// ── สถานะว่าง/ไม่ว่างของช่าง — คำนวณอัตโนมัติจากงาน Open/In-progress ที่มีอยู่แล้ว
+// (ไม่ต้องให้ใครมานั่งกดตั้งสถานะเองแบบ Fixtab — ข้อมูลขับเคลื่อน Dashboard เหมือนส่วนอื่นของระบบ)
+function getTechWorkload(techName){
+  if(!techName || techName==='—') return null;
+  const all = wrAllData.length ? wrAllData : DB.get('wr',[]);
+  const name = techName.trim().toLowerCase();
+  if(!name) return null;
+  return all.filter(w=>{
+    const t=(w.assignedTo||w.tech||'').trim().toLowerCase();
+    return t===name && (w.status==='open'||w.status==='inprog');
+  }).length;
+}
+function techStatusBadge(techName){
+  if(!techName||techName==='—') return '';
+  const n=getTechWorkload(techName);
+  if(n===null) return '';
+  return n>0
+    ? `<span class="badge bg-yellow" style="font-size:9px;margin-left:4px" title="มีงานค้าง ${n} รายการ">🔧 ${n}</span>`
+    : `<span class="badge bg-green" style="font-size:9px;margin-left:4px" title="ไม่มีงานค้าง">✓ ว่าง</span>`;
+}
 
 // Override renderWRTable เพิ่มปุ่ม 🔍 Detail
 renderWRTable = function(){
@@ -3866,7 +4084,7 @@ renderWRTable = function(){
       <td><span class="badge ${priColor[w.priority]||'bg-gray'}" style="font-size:10px">${w.priority||'—'}</span></td>
       <td style="font-size:11px">${w.reportedBy||w.by||'—'}</td>
       <td style="font-size:11px">${date}</td>
-      <td style="font-size:11px">${tech}</td>
+      <td style="font-size:11px">${tech}${techStatusBadge(tech)}</td>
       <td class="ff-m" style="font-size:11px">${w.mttrHours||w.mttr||'—'}</td>
       <td><span class="badge ${stColor[w.status]||'bg-gray'}" style="font-size:10px">${stLabel[w.status]||w.status||'—'}</span></td>
       <td><div class="flex gap-8">
@@ -4074,7 +4292,7 @@ function savePendingDetail(){
     wrAllData[i].pendingResumeDate=resumeDate;
     DB.set('wr',wrAllData);
     applyWRFilter();drawWRCharts();
-    syncToSheets('Work_Orders',{id,status:'pending',pendingDetail:detail,userPending:user,pendingDate:wrAllData[i].pendingDate});
+    syncWRRecords([wrAllData[i]]);
   }
   closeModal('pendingDetailModal');
   alert('✅ บันทึก Pending สำเร็จ\nเหตุผล: '+detail.slice(0,50));
@@ -4102,7 +4320,7 @@ renderWRTable = function(){
       <td><span class="badge ${priColor[w.priority]||'bg-gray'}" style="font-size:10px">${w.priority||'—'}</span></td>
       <td style="font-size:11px">${w.reportedBy||w.by||'—'}</td>
       <td style="font-size:11px">${date}</td>
-      <td style="font-size:11px">${tech}</td>
+      <td style="font-size:11px">${tech}${techStatusBadge(tech)}</td>
       <td class="ff-m" style="font-size:11px">${w.mttrHours?parseFloat(w.mttrHours).toFixed(0)+'h':'—'}</td>
       <td>
         <span class="badge ${stColor[w.status]||'bg-gray'}" style="font-size:10px">${stLabel[w.status]||w.status||'—'}</span>

@@ -56,6 +56,8 @@ function doPost(e) {
       case 'suspendUser':    return jsonResponse(actionSetUserStatus(body.username, 'suspended'));
       case 'changeRole':     return jsonResponse(actionChangeRole(body.username, body.role));
       case 'deleteUser':     return jsonResponse(actionDeleteUser(body.username));
+      case 'uploadFile':     return jsonResponse(actionUploadFile(body));
+      case 'deleteWR':       return jsonResponse(actionDeleteWR(body.id));
       default:                return jsonResponse({ ok: false, error: 'Unknown action: ' + action });
     }
   } catch (err) {
@@ -95,7 +97,9 @@ function sheetToObjects(sheet) {
   });
 }
 
-/** Overwrites a sheet's contents (header + rows) from an array of objects. Header = union of all keys. */
+/** Overwrites a sheet's contents (header + rows) from an array of objects. Header = union of all keys.
+ *  เขียนเป็น Plain Text เสมอ (setNumberFormat('@')) ป้องกัน Sheets แปลง string วันที่/เวลา
+ *  (เช่น "13:13:03") เป็น serial datetime อัตโนมัติ ซึ่งจะอ่านกลับมาผิดเพี้ยนเป็น "1899-12-30 13:13" */
 function objectsToSheet(sheet, objects) {
   sheet.clearContents();
   if (!objects || objects.length === 0) return;
@@ -104,10 +108,15 @@ function objectsToSheet(sheet, objects) {
   const headers = Object.keys(headerSet);
   const rows = objects.map(function (o) { return headers.map(function (h) { return o[h] !== undefined ? o[h] : ''; }); });
   sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-  if (rows.length) sheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
+  if (rows.length) {
+    const dataRange = sheet.getRange(2, 1, rows.length, headers.length);
+    dataRange.setNumberFormat('@');
+    dataRange.setValues(rows);
+  }
 }
 
-/** Appends one row to a sheet, creating the sheet/header from the object's own keys if needed. */
+/** Appends one row to a sheet, creating the sheet/header from the object's own keys if needed.
+ *  เขียนเป็น Plain Text เสมอเช่นเดียวกับ objectsToSheet ด้านบน */
 function appendRow(sheet, obj) {
   const headers = sheet.getLastRow() > 0
     ? sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String)
@@ -115,10 +124,14 @@ function appendRow(sheet, obj) {
   if (headers.length === 0) {
     const newHeaders = Object.keys(obj);
     sheet.getRange(1, 1, 1, newHeaders.length).setValues([newHeaders]);
-    sheet.appendRow(newHeaders.map(function (h) { return obj[h] !== undefined ? obj[h] : ''; }));
+    const dataRange = sheet.getRange(2, 1, 1, newHeaders.length);
+    dataRange.setNumberFormat('@');
+    dataRange.setValues([newHeaders.map(function (h) { return obj[h] !== undefined ? obj[h] : ''; })]);
     return;
   }
-  sheet.appendRow(headers.map(function (h) { return obj[h] !== undefined ? obj[h] : ''; }));
+  const rowRange = sheet.getRange(sheet.getLastRow() + 1, 1, 1, headers.length);
+  rowRange.setNumberFormat('@');
+  rowRange.setValues([headers.map(function (h) { return obj[h] !== undefined ? obj[h] : ''; })]);
 }
 
 function jsonResponse(obj) {
@@ -169,6 +182,14 @@ function actionUpdate(body) {
 function getWRData(limit) {
   const rows = sheetToObjects(getSheet(WR_SHEET, false));
   return rows.slice(-limit);
+}
+
+function actionDeleteWR(id) {
+  const sheet = getSheet(WR_SHEET, false);
+  if (!sheet) return { ok: false };
+  const rows = sheetToObjects(sheet).filter(function (r) { return r.id !== id; });
+  objectsToSheet(sheet, rows);
+  return { ok: true };
 }
 
 function actionImportFixtab(body) {
@@ -286,6 +307,42 @@ function actionDeleteUser(username) {
   const users = sheetToObjects(sheet).filter(function (u) { return u.username !== username; });
   objectsToSheet(sheet, users);
   return { ok: true };
+}
+
+// ════════════════════════════════════════════════════
+//  FILE UPLOAD — เก็บรูปแนบ/ลายเซ็นเป็นไฟล์ใน Google Drive โฟลเดอร์เดียวกับ Sheet
+//  (ไม่เก็บเป็น base64 ในเซลล์ของ Sheet เพราะจะทำให้ไฟล์โตและช้าลงเรื่อยๆ)
+// ════════════════════════════════════════════════════
+const ATTACHMENTS_FOLDER_NAME = 'eNGINNo_SBS_Attachments';
+
+function getAttachmentsFolder() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const file = DriveApp.getFileById(ss.getId());
+  const parents = file.getParents();
+  const parentFolder = parents.hasNext() ? parents.next() : DriveApp.getRootFolder();
+  const existing = parentFolder.getFoldersByName(ATTACHMENTS_FOLDER_NAME);
+  return existing.hasNext() ? existing.next() : parentFolder.createFolder(ATTACHMENTS_FOLDER_NAME);
+}
+
+/** body: { filename, mimeType, base64Data, subfolder (เช่น WR ticket id) } */
+function actionUploadFile(body) {
+  if (!body.base64Data) return { ok: false, error: 'Missing base64Data' };
+  const root = getAttachmentsFolder();
+  let targetFolder = root;
+  if (body.subfolder) {
+    const existing = root.getFoldersByName(String(body.subfolder));
+    targetFolder = existing.hasNext() ? existing.next() : root.createFolder(String(body.subfolder));
+  }
+  const bytes = Utilities.base64Decode(body.base64Data);
+  const blob = Utilities.newBlob(bytes, body.mimeType || 'application/octet-stream', body.filename || 'file');
+  const file = targetFolder.createFile(blob);
+  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  return {
+    ok: true,
+    fileId: file.getId(),
+    url: file.getUrl(),
+    directUrl: 'https://drive.google.com/uc?export=view&id=' + file.getId()
+  };
 }
 
 // ════════════════════════════════════════════════════
