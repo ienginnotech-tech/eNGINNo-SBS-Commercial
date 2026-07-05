@@ -15,3 +15,6 @@ Thumbs.db
 # or in Apps Script's own project, never in source control
 secrets.json
 *.local.json
+
+# Internal strategy docs (competitor/vendor pricing references) — not for the public repo
+docs/
